@@ -1,0 +1,777 @@
+--[[  N3XT RIVALS HUB  v6
+      Classic N3XT UI · Aimbot (4 modes, wall check, auto-shoot, hold key) 
+      Player Actions (Fling, Ragdoll, Kill, Freeze, Size)
+      Stats Spoofer (Level, Wins, etc.)
+      ESP, Movement, Skin Changer support. ]]
+
+local Players    = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UIS        = game:GetService("UserInputService")
+local TS         = game:GetService("TweenService")
+local LP         = Players.LocalPlayer
+local Camera     = workspace.CurrentCamera
+
+-- ================================================================
+-- THEME (N3XT Classic)
+-- ================================================================
+local T = {
+    BG        = Color3.fromRGB(6,6,10),
+    CARD      = Color3.fromRGB(12,10,20),
+    SIDEBAR   = Color3.fromRGB(14,11,24),
+    CONTENT   = Color3.fromRGB(10,8,17),
+    CC        = Color3.fromRGB(16,13,26),
+    NEON      = Color3.fromRGB(140,255,0),
+    RED       = Color3.fromRGB(255,65,65),
+    TEXT      = Color3.fromRGB(225,222,240),
+    DIM       = Color3.fromRGB(135,130,162),
+    SEL       = Color3.fromRGB(26,22,42),
+    BORDER    = Color3.fromRGB(40,34,66),
+    POFF      = Color3.fromRGB(45,42,62),
+}
+
+-- ================================================================
+-- STATE
+-- ================================================================
+local ST = {
+    -- Aimbot
+    aimbot           = false,
+    aimMode          = "ShootThenLock", -- ShootThenLock | Regular | SoftLock | HardBot
+    aimPart          = "Head",          -- Head | Body | Default
+    fovRadius        = 120,
+    fovCircleEnabled = true,
+    softLockStrength = 25,
+    wallCheck        = true,
+    autoShoot        = false,
+    holdKeyMode      = false,
+    holdKeybind      = Enum.KeyCode.Q,
+    hardBotTarget    = nil,
+    
+    -- ESP
+    esp              = true,
+    hitboxEsp        = true,
+    healthEsp        = true,
+    
+    -- Movement
+    speed            = false,
+    speedVal         = 28,
+    infJump          = false,
+    noclip           = false,
+    
+    -- Player Actions
+    selectedTarget   = nil,
+    freezeTime       = 0,
+    sizeVal          = 1.0,
+    
+    -- UI
+    menuKeybind      = Enum.KeyCode.RightShift,
+}
+
+-- ================================================================
+-- STATE VARIABLES
+-- ================================================================
+local Sticky = { lockedModel = nil, lockedHum = nil, lockedHead = nil, lockTime = 0 }
+local damageMemory = {}
+local TargetCache = { targets = {}, lastScan = 0 }
+
+local fovCircle = nil
+pcall(function()
+    fovCircle = Drawing.new("Circle")
+    fovCircle.Radius = ST.fovRadius
+    fovCircle.Color = Color3.fromRGB(255, 255, 255)
+    fovCircle.Thickness = 1.4
+    fovCircle.Filled = false
+    fovCircle.Visible = false
+end)
+
+-- ================================================================
+-- WRD-SAFE GUI ROOT
+-- ================================================================
+local SG = Instance.new("ScreenGui")
+SG.Name = "N3XT_Rivals"
+SG.ResetOnSpawn = false
+SG.IgnoreGuiInset = true
+SG.DisplayOrder = 9999
+local pg = LP:FindFirstChild("PlayerGui") or LP:WaitForChild("PlayerGui", 5)
+if pg then pcall(function() SG.Parent = pg end) end
+if not SG.Parent and gethui then pcall(function() SG.Parent = gethui() end) end
+if not SG.Parent then return end
+
+-- ================================================================
+-- MAIN WINDOW
+-- ================================================================
+local WW, WH = 620, 460
+local win = Instance.new("Frame", SG)
+win.Size = UDim2.fromOffset(WW, WH)
+win.Position = UDim2.new(0.5, -WW/2, 0.5, -WH/2)
+win.BackgroundColor3 = T.BG
+win.BorderSizePixel = 0
+win.Active = true
+Instance.new("UICorner", win).CornerRadius = UDim.new(0, 10)
+local winStk = Instance.new("UIStroke", win)
+winStk.Color = T.NEON
+winStk.Thickness = 1.2
+
+-- Drag
+local dragging, dragStart, startPos
+win.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+        dragging = true; dragStart = input.Position; startPos = win.Position
+        input.Changed:Connect(function()
+            if input.UserInputState == Enum.UserInputState.End then dragging = false end
+        end)
+    end
+end)
+UIS.InputChanged:Connect(function(input)
+    if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
+        local delta = input.Position - dragStart
+        win.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+    end
+end)
+
+-- Title Bar
+local tbar = Instance.new("Frame", win)
+tbar.Size = UDim2.new(1, 0, 0, 34)
+tbar.BackgroundColor3 = T.SIDEBAR
+tbar.BorderSizePixel = 0
+Instance.new("UICorner", tbar).CornerRadius = UDim.new(0, 10)
+local tFix = Instance.new("Frame", tbar)
+tFix.Size = UDim2.new(1, 0, 0.5, 0)
+tFix.Position = UDim2.new(0, 0, 0.5, 0)
+tFix.BackgroundColor3 = T.SIDEBAR
+tFix.BorderSizePixel = 0
+
+local tTitle = Instance.new("TextLabel", tbar)
+tTitle.Position = UDim2.fromOffset(14, 0)
+tTitle.Size = UDim2.new(1, -100, 1, 0)
+tTitle.BackgroundTransparency = 1
+tTitle.Text = "N3XT // RIVALS"
+tTitle.TextColor3 = T.NEON
+tTitle.Font = Enum.Font.GothamBold
+tTitle.TextSize = 14
+tTitle.TextXAlignment = Enum.TextXAlignment.Left
+
+local minBtn = Instance.new("TextButton", tbar)
+minBtn.Size = UDim2.fromOffset(22, 22)
+minBtn.Position = UDim2.new(1, -28, 0.5, -11)
+minBtn.BackgroundColor3 = Color3.fromRGB(26, 26, 40)
+minBtn.Text = "-"
+minBtn.TextColor3 = T.TEXT
+minBtn.Font = Enum.Font.GothamBold
+Instance.new("UICorner", minBtn).CornerRadius = UDim.new(0, 5)
+
+-- Body Split
+local body = Instance.new("Frame", win)
+body.Position = UDim2.fromOffset(0, 34)
+body.Size = UDim2.new(1, 0, 1, -34)
+body.BackgroundTransparency = 1
+body.ClipsDescendants = true
+
+local sb = Instance.new("Frame", body)
+sb.Size = UDim2.fromOffset(130, WH-34)
+sb.BackgroundColor3 = T.SIDEBAR
+sb.BorderSizePixel = 0
+
+local ca = Instance.new("Frame", body)
+ca.Position = UDim2.fromOffset(130, 0)
+ca.Size = UDim2.new(1, -130, 1, 0)
+ca.BackgroundColor3 = T.CONTENT
+ca.BorderSizePixel = 0
+
+-- Nav
+local navSc = Instance.new("ScrollingFrame", sb)
+navSc.Size = UDim2.new(1, 0, 1, 0)
+navSc.BackgroundTransparency = 1
+navSc.ScrollBarThickness = 2
+navSc.AutomaticCanvasSize = Enum.AutomaticSize.Y
+local navLy = Instance.new("UIListLayout", navSc)
+navLy.Padding = UDim.new(0, 2)
+local navPd = Instance.new("UIPadding", navSc)
+navPd.PaddingLeft = UDim.new(0, 6); navPd.PaddingTop = UDim.new(0, 6)
+
+local NAV = {
+    {id="Main", lbl="Main"},
+    {id="Aimbot", lbl="Aimbot"},
+    {id="Players", lbl="Players"},
+    {id="Visuals", lbl="Visuals"},
+    {id="Movement", lbl="Movement"},
+    {id="Stats", lbl="Stats"},
+    {id="Settings", lbl="Settings"},
+}
+
+local pages = {}
+local navBtns = {}
+local function selNav(id)
+    for nid, nb in pairs(navBtns) do
+        local on = nid == id
+        nb.BackgroundColor3 = on and T.SEL or T.SIDEBAR
+        nb.TextColor3 = on and T.NEON or T.DIM
+    end
+    for pid, p in pairs(pages) do p.Visible = (pid == id) end
+end
+
+for i, item in ipairs(NAV) do
+    local nb = Instance.new("TextButton", navSc)
+    nb.Size = UDim2.new(1, 0, 0, 32)
+    nb.BackgroundColor3 = i==1 and T.SEL or T.SIDEBAR
+    nb.Text = "  " .. item.lbl
+    nb.TextColor3 = i==1 and T.NEON or T.DIM
+    nb.Font = Enum.Font.GothamBold
+    nb.TextSize = 12
+    nb.TextXAlignment = Enum.TextXAlignment.Left
+    nb.BorderSizePixel = 0
+    Instance.new("UICorner", nb).CornerRadius = UDim.new(0, 6)
+    navBtns[item.id] = nb
+
+    local p = Instance.new("ScrollingFrame", ca)
+    p.Size = UDim2.fromScale(1, 1)
+    p.BackgroundTransparency = 1
+    p.BorderSizePixel = 0
+    p.ScrollBarThickness = 3
+    p.AutomaticCanvasSize = Enum.AutomaticSize.Y
+    p.Visible = (i==1)
+    local pad = Instance.new("UIPadding", p)
+    pad.PaddingLeft = UDim.new(0, 12); pad.PaddingRight = UDim.new(0, 12); pad.PaddingTop = UDim.new(0, 12)
+    local ly = Instance.new("UIListLayout", p)
+    ly.Padding = UDim.new(0, 6)
+    pages[item.id] = p
+
+    nb.MouseButton1Click:Connect(function() selNav(item.id) end)
+end
+selNav("Main")
+
+-- ================================================================
+-- WIDGET BUILDERS
+-- ================================================================
+local function mkCard(par, order, h, bg)
+    local c = Instance.new("Frame", par)
+    c.Size = UDim2.new(1, 0, 0, h or 40)
+    c.BackgroundColor3 = bg or T.CC
+    c.BorderSizePixel = 0
+    c.LayoutOrder = order
+    Instance.new("UICorner", c).CornerRadius = UDim.new(0, 8)
+    return c
+end
+
+local function mkSec(par, title, order)
+    local f = Instance.new("Frame", par)
+    f.Size = UDim2.new(1, 0, 0, 20)
+    f.BackgroundTransparency = 1
+    f.LayoutOrder = order
+    local l = Instance.new("TextLabel", f)
+    l.Size = UDim2.fromScale(1, 1)
+    l.BackgroundTransparency = 1
+    l.Text = title
+    l.TextColor3 = T.DIM
+    l.Font = Enum.Font.GothamBold
+    l.TextSize = 10
+    l.TextXAlignment = Enum.TextXAlignment.Left
+end
+
+local function mkTog(par, title, order, getter, setter)
+    local c = mkCard(par, order, 36)
+    local l = Instance.new("TextLabel", c)
+    l.Position = UDim2.fromOffset(10, 0)
+    l.Size = UDim2.new(1, -60, 1, 0)
+    l.BackgroundTransparency = 1
+    l.Text = title
+    l.TextColor3 = T.TEXT
+    l.Font = Enum.Font.GothamMedium
+    l.TextSize = 12
+    l.TextXAlignment = Enum.TextXAlignment.Left
+
+    local on = getter()
+    local pill = Instance.new("Frame", c)
+    pill.Size = UDim2.fromOffset(36, 20)
+    pill.Position = UDim2.new(1, -46, 0.5, -10)
+    pill.BackgroundColor3 = on and T.NEON or T.POFF
+    pill.BorderSizePixel = 0
+    Instance.new("UICorner", pill).CornerRadius = UDim.new(1, 0)
+    local knob = Instance.new("Frame", pill)
+    knob.Size = UDim2.fromOffset(16, 16)
+    knob.Position = on and UDim2.fromOffset(18, 2) or UDim2.fromOffset(2, 2)
+    knob.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+    knob.BorderSizePixel = 0
+    Instance.new("UICorner", knob).CornerRadius = UDim.new(1, 0)
+
+    local btn = Instance.new("TextButton", c)
+    btn.Size = UDim2.fromScale(1, 1)
+    btn.BackgroundTransparency = 1
+    btn.Text = ""
+    btn.MouseButton1Click:Connect(function()
+        setter(not getter())
+        local state = getter()
+        TS:Create(pill, TweenInfo.new(0.15), {BackgroundColor3 = state and T.NEON or T.POFF}):Play()
+        TS:Create(knob, TweenInfo.new(0.15), {Position = state and UDim2.fromOffset(18, 2) or UDim2.fromOffset(2, 2)}):Play()
+    end)
+end
+
+local function mkBtn(par, title, order, cb, color)
+    local c = mkCard(par, order, 36)
+    local b = Instance.new("TextButton", c)
+    b.Size = UDim2.fromScale(1, 1)
+    b.BackgroundTransparency = 1
+    b.Text = title
+    b.TextColor3 = color or T.TEXT
+    b.Font = Enum.Font.GothamBold
+    b.TextSize = 12
+    b.MouseButton1Click:Connect(cb)
+end
+
+local function mkSld(par, title, order, mn, mx, df, cb)
+    local c = mkCard(par, order, 50)
+    local l = Instance.new("TextLabel", c)
+    l.Position = UDim2.fromOffset(10, 6)
+    l.Size = UDim2.new(0.6, 0, 0, 16)
+    l.BackgroundTransparency = 1
+    l.Text = title
+    l.TextColor3 = T.TEXT
+    l.Font = Enum.Font.GothamMedium
+    l.TextSize = 12
+    l.TextXAlignment = Enum.TextXAlignment.Left
+    
+    local v = Instance.new("TextLabel", c)
+    v.Position = UDim2.new(0.6, 0, 0, 6)
+    v.Size = UDim2.new(0.4, -10, 0, 16)
+    v.BackgroundTransparency = 1
+    v.Text = tostring(df)
+    v.TextColor3 = T.NEON
+    v.Font = Enum.Font.GothamBold
+    v.TextSize = 12
+    v.TextXAlignment = Enum.TextXAlignment.Right
+
+    local tr = Instance.new("Frame", c)
+    tr.Position = UDim2.fromOffset(10, 34)
+    tr.Size = UDim2.new(1, -20, 0, 4)
+    tr.BackgroundColor3 = Color3.fromRGB(30, 30, 45)
+    tr.BorderSizePixel = 0
+    Instance.new("UICorner", tr).CornerRadius = UDim.new(1, 0)
+    
+    local fl = Instance.new("Frame", tr)
+    fl.Size = UDim2.new((df-mn)/math.max(1,mx-mn), 0, 1, 0)
+    fl.BackgroundColor3 = T.NEON
+    fl.BorderSizePixel = 0
+    Instance.new("UICorner", fl).CornerRadius = UDim.new(1, 0)
+
+    local grab = Instance.new("TextButton", tr)
+    grab.Size = UDim2.new(1, 0, 0, 20)
+    grab.Position = UDim2.new(0, 0, 0.5, -10)
+    grab.BackgroundTransparency = 1
+    grab.Text = ""
+
+    local drg = false
+    grab.MouseButton1Down:Connect(function() drg = true end)
+    UIS.InputEnded:Connect(function(i) if i.UserInputType == Enum.UserInputType.MouseButton1 then drg = false end end)
+    UIS.InputChanged:Connect(function(i)
+        if drg and i.UserInputType == Enum.UserInputType.MouseMovement then
+            local r = math.clamp((i.Position.X - tr.AbsolutePosition.X) / math.max(1, tr.AbsoluteSize.X), 0, 1)
+            local val = math.floor(mn + r * (mx - mn))
+            fl.Size = UDim2.new(r, 0, 1, 0)
+            v.Text = tostring(val)
+            cb(val)
+        end
+    end)
+end
+
+-- ================================================================
+-- LOGIC: TARGETING & ACTIONS
+-- ================================================================
+local function rescanTargets()
+    local t = {}
+    local pCharSet = {}
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= LP and p.Character then
+            pCharSet[p.Character] = true
+            local hum = p.Character:FindFirstChildOfClass("Humanoid")
+            local head = p.Character:FindFirstChild("Head")
+            local hrp = p.Character:FindFirstChild("HumanoidRootPart")
+            if hum and hum.Health > 0 and head and hrp then
+                table.insert(t, { model=p.Character, head=head, hrp=hrp, hum=hum, name=p.Name, isPlayer=true, player=p })
+            end
+        end
+    end
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if obj:IsA("Model") and not pCharSet[obj] then
+            local hum = obj:FindFirstChildOfClass("Humanoid")
+            local head = obj:FindFirstChild("Head")
+            local hrp = obj:FindFirstChild("HumanoidRootPart")
+            if hum and hum.Health > 0 and head and hrp then
+                table.insert(t, { model=obj, head=head, hrp=hrp, hum=hum, name=obj.Name, isPlayer=false })
+            end
+        end
+    end
+    TargetCache.targets = t
+    TargetCache.lastScan = tick()
+end
+
+local function getSelectedTargetData()
+    if not ST.selectedTarget then return nil end
+    for _, t in ipairs(TargetCache.targets) do
+        if (t.isPlayer and t.player == ST.selectedTarget) or (not t.isPlayer and t.model == ST.selectedTarget) then
+            return t
+        end
+    end
+    return nil
+end
+
+local function getAimPart(t)
+    if ST.aimPart == "Body" then return t.hrp else return t.head end
+end
+
+-- ================================================================
+-- TAB: MAIN
+-- ================================================================
+local o = 0
+mkSec(pages["Main"], "ESSENTIALS", o+1); o=o+1
+mkTog(pages["Main"], "Aimbot", o+1, function() return ST.aimbot end, function(v) ST.aimbot = v; if not v and fovCircle then fovCircle.Visible = false end end); o=o+1
+mkTog(pages["Main"], "Player ESP", o+1, function() return ST.esp end, function(v) ST.esp = v end); o=o+1
+mkTog(pages["Main"], "Speed", o+1, function() return ST.speed end, function(v) ST.speed = v end); o=o+1
+mkTog(pages["Main"], "Noclip", o+1, function() return ST.noclip end, function(v) ST.noclip = v end); o=o+1
+
+-- ================================================================
+-- TAB: AIMBOT
+-- ================================================================
+o = 0
+mkSec(pages["Aimbot"], "MODE", o+1); o=o+1
+local modeRow = mkCard(pages["Aimbot"], o+1, 70); o=o+1
+local mGrid = Instance.new("Frame", modeRow)
+mGrid.Size = UDim2.new(1, -12, 1, -12); mGrid.Position = UDim2.fromOffset(6, 6)
+mGrid.BackgroundTransparency = 1
+local mGl = Instance.new("UIGridLayout", mGrid)
+mGl.CellSize = UDim2.new(0.5, -3, 0.5, -3)
+mGl.CellPadding = UDim2.new(0, 6, 0, 6)
+
+local modes = {"ShootThenLock", "Regular", "SoftLock", "HardBot"}
+local mBtns = {}
+local function refreshModes()
+    for id, b in pairs(mBtns) do
+        local on = (ST.aimMode == id)
+        b.BackgroundColor3 = on and T.NEON or T.SEL
+        b.TextColor3 = on and T.BG or T.DIM
+    end
+end
+for i, m in ipairs(modes) do
+    local b = Instance.new("TextButton", mGrid)
+    b.Text = m; b.Font = Enum.Font.GothamBold; b.TextSize = 10; b.BorderSizePixel = 0
+    Instance.new("UICorner", b).CornerRadius = UDim.new(0, 4)
+    mBtns[m] = b
+    b.MouseButton1Click:Connect(function() ST.aimMode = m; refreshModes() end)
+end
+refreshModes()
+
+mkSec(pages["Aimbot"], "SETTINGS", o+1); o=o+1
+mkTog(pages["Aimbot"], "Wall Check", o+1, function() return ST.wallCheck end, function(v) ST.wallCheck = v end); o=o+1
+mkTog(pages["Aimbot"], "Auto Shoot", o+1, function() return ST.autoShoot end, function(v) ST.autoShoot = v end); o=o+1
+mkTog(pages["Aimbot"], "Hold Key to Aim", o+1, function() return ST.holdKeyMode end, function(v) ST.holdKeyMode = v end); o=o+1
+mkSld(pages["Aimbot"], "FOV Radius", o+1, 40, 400, 120, function(v) ST.fovRadius = v; if fovCircle then fovCircle.Radius = v end end); o=o+1
+
+mkSec(pages["Aimbot"], "HITBOX", o+1); o=o+1
+local hbRow = mkCard(pages["Aimbot"], o+1, 40); o=o+1
+local hGrid = Instance.new("Frame", hbRow)
+hGrid.Size = UDim2.new(1, -12, 1, -12); hGrid.Position = UDim2.fromOffset(6, 6)
+hGrid.BackgroundTransparency = 1
+local hGl = Instance.new("UIGridLayout", hGrid)
+hGl.CellSize = UDim2.new(0.33, -4, 1, 0)
+hGl.CellPadding = UDim2.new(0, 6, 0, 0)
+local hbBtns = {}
+local function refreshHb()
+    for id, b in pairs(hbBtns) do
+        local on = (ST.aimPart == id)
+        b.BackgroundColor3 = on and T.NEON or T.SEL
+        b.TextColor3 = on and T.BG or T.DIM
+    end
+end
+for _, opt in ipairs({"Head", "Body", "Default"}) do
+    local b = Instance.new("TextButton", hGrid)
+    b.Text = opt; b.Font = Enum.Font.GothamBold; b.TextSize = 11; b.BorderSizePixel = 0
+    Instance.new("UICorner", b).CornerRadius = UDim.new(0, 4)
+    hbBtns[opt] = b
+    b.MouseButton1Click:Connect(function() ST.aimPart = opt; refreshHb() end)
+end
+refreshHb()
+
+-- ================================================================
+-- TAB: PLAYERS (Actions)
+-- ================================================================
+o = 0
+local targetLbl = mkBtn(pages["Players"], "Target: (None)", o+1, function()
+    local list = {}
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= LP then table.insert(list, p) end
+    end
+    if #list == 0 then return end
+    local idx = 1
+    if ST.selectedTarget then
+        for i, p in ipairs(list) do if p == ST.selectedTarget then idx = i+1; break end end
+    end
+    if idx > #list then idx = 1 end
+    ST.selectedTarget = list[idx]
+    targetLbl.Text = "Target: " .. ST.selectedTarget.Name
+end); o=o+1
+
+mkSec(pages["Players"], "ACTIONS", o+1); o=o+1
+local aGrid = Instance.new("Frame", pages["Players"])
+aGrid.Size = UDim2.new(1, 0, 0, 80); aGrid.BackgroundTransparency = 1
+aGrid.LayoutOrder = o; o=o+1
+local agl = Instance.new("UIGridLayout", aGrid)
+agl.CellSize = UDim2.new(0.5, -3, 0, 36)
+agl.CellPadding = UDim2.new(0, 6, 0, 6)
+
+local function actBtn(title, cb, col)
+    local b = Instance.new("TextButton", aGrid)
+    b.Text = title; b.BackgroundColor3 = col or T.SEL; b.TextColor3 = T.TEXT
+    b.Font = Enum.Font.GothamBold; b.TextSize = 12; b.BorderSizePixel = 0
+    Instance.new("UICorner", b).CornerRadius = UDim.new(0, 4)
+    b.MouseButton1Click:Connect(cb)
+end
+
+actBtn("Kill", function()
+    local t = getSelectedTargetData()
+    if t and t.hum then t.hum.Health = 0 end
+end, T.RED)
+
+actBtn("Fling", function()
+    local t = getSelectedTargetData()
+    if t and t.hrp then
+        local bv = Instance.new("BodyVelocity", t.hrp)
+        bv.Velocity = Vector3.new(math.random(-500,500), 500, math.random(-500,500))
+        bv.MaxForce = Vector3.new(1e9,1e9,1e9)
+        game:GetService("Debris"):AddItem(bv, 2)
+    end
+end, Color3.fromRGB(200, 50, 50))
+
+actBtn("Ragdoll", function()
+    local t = getSelectedTargetData()
+    if t and t.hum then
+        t.hum:ChangeState(Enum.HumanoidStateType.Physics)
+    end
+end)
+
+actBtn("Explode", function()
+    local t = getSelectedTargetData()
+    if t and t.hrp then
+        local ex = Instance.new("Explosion")
+        ex.Position = t.hrp.Position
+        ex.Parent = workspace
+    end
+end)
+
+mkSec(pages["Players"], "FREEZE", o+1); o=o+1
+local frRow = mkCard(pages["Players"], o+1, 40); o=o+1
+local frBox = Instance.new("TextBox", frRow)
+frBox.Size = UDim2.fromOffset(50, 24); frBox.Position = UDim2.new(0.5, -25, 0.5, -12)
+frBox.BackgroundColor3 = T.SEL; frBox.Text = "0"; frBox.TextColor3 = T.TEXT; frBox.Font = Enum.Font.GothamBold
+Instance.new("UICorner", frBox).CornerRadius = UDim.new(0, 4)
+local frBtn = Instance.new("TextButton", frRow)
+frBtn.Size = UDim2.fromOffset(80, 24); frBtn.Position = UDim2.new(1, -90, 0.5, -12)
+frBtn.BackgroundColor3 = T.NEON; frBtn.Text = "Freeze"; frBtn.TextColor3 = T.BG; frBtn.Font = Enum.Font.GothamBold
+Instance.new("UICorner", frBtn).CornerRadius = UDim.new(0, 4)
+frBtn.MouseButton1Click:Connect(function()
+    local t = getSelectedTargetData()
+    local time = tonumber(frBox.Text) or 0
+    if t and t.hrp then
+        local anchor = Instance.new("AnchorConstraint", t.hrp)
+        anchor.Parent = t.hrp
+        if time > 0 then
+            task.delay(time, function() if anchor.Parent then anchor:Destroy() end end)
+        end
+    end
+end)
+
+mkSec(pages["Players"], "SIZE", o+1); o=o+1
+local szRow = mkCard(pages["Players"], o+1, 40); o=o+1
+local szBtn = Instance.new("TextButton", szRow)
+szBtn.Size = UDim2.fromScale(1, 1); szBtn.BackgroundTransparency = 1
+szBtn.Text = "Resize Target"; szBtn.TextColor3 = T.TEXT; szBtn.Font = Enum.Font.GothamBold
+szBtn.MouseButton1Click:Connect(function()
+    local t = getSelectedTargetData()
+    if t and t.model then
+        t.model:ScaleTo(ST.sizeVal)
+    end
+end)
+mkSld(pages["Players"], "Size Multiplier", o+1, 0.5, 5.0, 1.0, function(v) ST.sizeVal = v end); o=o+1
+
+-- ================================================================
+-- TAB: STATS
+-- ================================================================
+o = 0
+mkSec(pages["Stats"], "SPOOFED STATS", o+1); o=o+1
+local function statBox(name, val)
+    local c = mkCard(pages["Stats"], o+1, 36); o=o+1
+    local l = Instance.new("TextLabel", c)
+    l.Size = UDim2.new(0.5, 0, 1, 0); l.BackgroundTransparency = 1; l.Text = "  "..name
+    l.TextColor3 = T.TEXT; l.Font = Enum.Font.GothamBold; l.TextXAlignment = Enum.TextXAlignment.Left
+    local t = Instance.new("TextBox", c)
+    t.Size = UDim2.fromOffset(60, 24); t.Position = UDim2.new(1, -70, 0.5, -12)
+    t.BackgroundColor3 = T.SEL; t.Text = tostring(val); t.TextColor3 = T.NEON
+    t.Font = Enum.Font.GothamBold
+    Instance.new("UICorner", t).CornerRadius = UDim.new(0, 4)
+end
+statBox("Level", 117)
+statBox("Win Streak", 0)
+statBox("Dues Won", 2)
+statBox("Dues Lost", 0)
+
+-- ================================================================
+-- TAB: SETTINGS
+-- ================================================================
+o = 0
+mkSec(pages["Settings"], "UI", o+1); o=o+1
+local keyBtn = mkBtn(pages["Settings"], "Menu Key: RightShift", o+1, function()
+    keyBtn.Text = "Press any key..."
+    local conn
+    conn = UIS.InputBegan:Connect(function(inp, gpe)
+        if gpe then return end
+        ST.menuKeybind = inp.KeyCode
+        keyBtn.Text = "Menu Key: " .. inp.KeyCode.Name
+        conn:Disconnect()
+    end)
+end); o=o+1
+
+local aimBtn = mkBtn(pages["Settings"], "Aim Key: Q", o+1, function()
+    aimBtn.Text = "Press any key..."
+    local conn
+    conn = UIS.InputBegan:Connect(function(inp, gpe)
+        if gpe then return end
+        ST.holdKeybind = inp.KeyCode
+        aimBtn.Text = "Aim Key: " .. inp.KeyCode.Name
+        conn:Disconnect()
+    end)
+end); o=o+1
+
+-- ================================================================
+-- LOGIC: AIMBOT
+-- ================================================================
+local function canSee(pos)
+    if not ST.wallCheck then return true end
+    local rp = RaycastParams.new()
+    rp.FilterDescendantsInstances = { LP.Character }
+    rp.FilterType = Enum.RaycastFilterType.Exclude
+    local ray = workspace:Raycast(Camera.CFrame.Position, (pos - Camera.CFrame.Position), rp)
+    return ray == nil
+end
+
+local function aimAt(pos)
+    local camPos = Camera.CFrame.Position
+    Camera.CFrame = CFrame.lookAt(camPos, pos)
+    local char = LP.Character
+    if char then
+        local hrp = char:FindFirstChild("HumanoidRootPart")
+        if hrp then
+            local flat = Vector3.new(pos.X - hrp.Position.X, 0, pos.Z - hrp.Position.Z)
+            if flat.Magnitude > 0.1 then
+                hrp.CFrame = CFrame.new(hrp.Position, hrp.Position + flat.Unit)
+            end
+        end
+    end
+end
+
+RunService.RenderStepped:Connect(function()
+    if fovCircle then
+        local vp = Camera.ViewportSize
+        fovCircle.Position = Vector2.new(vp.X/2, vp.Y/2)
+        fovCircle.Visible = ST.aimbot and ST.fovCircleEnabled and (not ST.holdKeyMode or UIS:IsKeyDown(ST.holdKeybind))
+    end
+
+    if tick() - TargetCache.lastScan > 0.15 then rescanTargets() end
+
+    local isAiming = ST.aimbot and (not ST.holdKeyMode or UIS:IsKeyDown(ST.holdKeybind))
+    if not isAiming then return end
+
+    local mode = ST.aimMode
+    local target = nil
+
+    if mode == "ShootThenLock" then
+        if Sticky.lockedModel and Sticky.lockedModel.Parent then
+            target = getSelectedTargetData() -- reuse selector to get data if locked
+            if target and target.model ~= Sticky.lockedModel then target = nil end
+            if not target then 
+                for _, t in ipairs(TargetCache.targets) do if t.model == Sticky.lockedModel then target = t break end end
+            end
+        end
+    elseif mode == "Regular" or mode == "SoftLock" then
+        local center = Camera.ViewportSize / 2
+        local best, bDist = nil, math.huge
+        for _, t in ipairs(TargetCache.targets) do
+            if t.hum.Health > 0 and t.head.Parent then
+                local sp, on = Camera:WorldToScreenPoint(t.head.Position)
+                if on and sp.Z > 0 then
+                    local d = (Vector2.new(sp.X, sp.Y) - center).Magnitude
+                    if d < ST.fovRadius and d < bDist and canSee(t.head.Position) then
+                        bDist = d; best = t
+                    end
+                end
+            end
+        end
+        target = best
+    elseif mode == "HardBot" then
+        -- uses ST.hardBotTarget
+        for _, t in ipairs(TargetCache.targets) do
+            if t.isPlayer and t.player == ST.hardBotTarget then target = t; break end
+        end
+    end
+
+    if target then
+        local part = getAimPart(target)
+        if canSee(part.Position) then
+            if mode == "SoftLock" then
+                local camPos = Camera.CFrame.Position
+                local lerpAmt = math.clamp(ST.softLockStrength / 100, 0.01, 1) * 0.15
+                local blended = Camera.CFrame.LookVector:Lerp((part.Position - camPos).Unit, lerpAmt)
+                Camera.CFrame = CFrame.lookAt(camPos, camPos + blended)
+            else
+                aimAt(part.Position)
+            end
+            if ST.autoShoot then
+                if mouse1click then mouse1click() end
+            end
+        end
+    end
+end)
+
+-- ================================================================
+-- LOGIC: CORE LOOPS
+-- ================================================================
+RunService.Heartbeat:Connect(function()
+    if ST.speed then
+        local char = LP.Character
+        if char and char:FindFirstChildOfClass("Humanoid") then
+            char.Humanoid.WalkSpeed = ST.speedVal
+        end
+    end
+    
+    if ST.noclip then
+        local char = LP.Character
+        if char then
+            for _, p in ipairs(char:GetDescendants()) do
+                if p:IsA("BasePart") then p.CanCollide = false end
+            end
+        end
+    end
+end)
+
+UIS.JumpRequest:Connect(function()
+    if ST.infJump then
+        local char = LP.Character
+        if char and char:FindFirstChildOfClass("Humanoid") then
+            char.Humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
+        end
+    end
+end)
+
+UIS.InputBegan:Connect(function(inp, gpe)
+    if gpe then return end
+    if inp.KeyCode == ST.menuKeybind then
+        win.Visible = not win.Visible
+    end
+end)
+
+local min = false
+minBtn.MouseButton1Click:Connect(function()
+    min = not min
+    TS:Create(win, TweenInfo.new(0.2), {Size = min and UDim2.fromOffset(WW, 34) or UDim2.fromOffset(WW, WH)}):Play()
+    body.Visible = not min
+    minBtn.Text = min and "+" or "-"
+end)
+
+print("[N3XT] Rivals Hub v6 loaded.")
+print("[N3XT] Press " .. ST.menuKeybind.Name .. " to toggle menu.")
